@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <string>
+#include <map>
+std::map<int, std::string> constantmap;
 struct AptCharacter;
 struct AptFloatArrayCXForm
 {
@@ -993,9 +995,12 @@ void InitAnimation(AptCharacterAnimation* character, unsigned char* aptdata, uns
 {
     AddPointer(character->apCharacters, aptdata);
     AddPointer(character->aExports, aptdata);
-    for (int i = 0; i < character->nExports; i++)
+    if (character->aExports)
     {
-        AddPointer(character->aExports[i].szName, aptdata);
+        for (int i = 0; i < character->nExports; i++)
+        {
+            AddPointer(character->aExports[i].szName, aptdata);
+        }
     }
     for (int i = 0; i < character->nCharacters; i++)
     {
@@ -1058,6 +1063,7 @@ void InitAnimation(AptCharacterAnimation* character, unsigned char* aptdata, uns
 
 void ProcessActions(FILE *f3, char* stream, unsigned char* aptdata, const char* indent)
 {
+    std::map<int, std::string> dictmap;
     int opcode = (unsigned char)*stream;
     unsigned int pos = (unsigned int)(stream + 1);
     if (!*stream)
@@ -1095,6 +1101,22 @@ void ProcessActions(FILE *f3, char* stream, unsigned char* aptdata, const char* 
         }
         break;
         case AptActionDefineDictionary:
+        {
+            AptAction_Push* push = (AptAction_Push*)((pos + 3) & ~3);
+            pos = ((pos + 3) & ~3) + sizeof(AptAction_Push);
+            fprintf(f3, "%s%s ", indent, actionstrings[opcode]);
+            for (int i = 0; i < push->items.nItems; i++)
+            {
+                dictmap[i] = constantmap[(int)push->items.apItems[i]];
+                fprintf(f3, "%s", constantmap[(int)push->items.apItems[i]].c_str());
+                if (i < push->items.nItems - 1)
+                {
+                    fprintf(f3, " ");
+                }
+            }
+            fprintf(f3, "\n");
+        }
+        break;
         case AptActionPush:
         {
             AptAction_Push* push = (AptAction_Push*)((pos + 3) & ~3);
@@ -1102,7 +1124,7 @@ void ProcessActions(FILE *f3, char* stream, unsigned char* aptdata, const char* 
             fprintf(f3, "%s%s ", indent, actionstrings[opcode]);
             for (int i = 0; i < push->items.nItems; i++)
             {
-                fprintf(f3, "%d", (int)push->items.apItems[i]);
+                fprintf(f3, "%s", constantmap[(int)push->items.apItems[i]].c_str());
                 if (i < push->items.nItems - 1)
                 {
                     fprintf(f3, " ");
@@ -1195,12 +1217,18 @@ void ProcessActions(FILE *f3, char* stream, unsigned char* aptdata, const char* 
         case AptActionDictCallFuncSetVar:
         case AptActionDictCallMethodPop:
         case AptActionDictCallMethodSetVar:
+            fprintf(f3, "%s%s %s\n", indent, actionstrings[opcode], dictmap[*(unsigned char*)pos].c_str());
+            pos++;
+            break;
         case AptActionPushByte:
         case AptActionPushRegister:
             fprintf(f3, "%s%s %d\n", indent, actionstrings[opcode], *(unsigned char*)pos);
             pos++;
             break;
         case AptActionPushStringDictWord:
+            fprintf(f3, "%s%s %s\n", indent, actionstrings[opcode], dictmap[*(unsigned short*)pos].c_str());
+            pos += 2;
+            break;
         case AptActionPushWord:
             fprintf(f3, "%s%s %d\n", indent, actionstrings[opcode], *(unsigned short*)pos);
             pos += 2;
@@ -1266,13 +1294,20 @@ void ParseApt(const char* name)
     }
     for (int i = 0; i < c->nConstants; i++)
     {
+        char buf[10];
         switch (c->aConstants[i].eType)
         {
         case AptVFT_StringValue:
-            fprintf(f3, "String Constant %s\n", c->aConstants[i].szString);
+            fprintf(f3, "String Constant %d %s\n", i, c->aConstants[i].szString);
+            constantmap[i] = c->aConstants[i].szString;
+            break;
+        case AptVFT_Register:
+            fprintf(f3, "Register Constant %d %d\n", i, c->aConstants[i].nRegister);
+            sprintf_s(buf, "%d", c->aConstants[i].nRegister);
+            constantmap[i] = buf;
             break;
         default:
-            fprintf(f3, "Unknown Constant Type %d\n", c->aConstants[i].eType);
+            fprintf(f3, "Unknown Constant Type %d %d\n", i, c->aConstants[i].eType);
             break;
         }
     }
@@ -1316,7 +1351,7 @@ void ParseApt(const char* name)
                 AptControlPlaceObject2* po = &m->movie.aFrames[i].apControls[j]->placeObject2;
                 fprintf(f3, "\tPlace Object:\n");
                 fprintf(f3, "\tFlags %d\n", po->eFlags);
-                fprintf(f3, "\tDepth %d\n", po->nClipDepth);
+                fprintf(f3, "\tDepth %d\n", po->nDepth);
                 fprintf(f3, "\tCharacter %d\n", po->nCharacterID);
                 fprintf(f3, "\tRotate/Scale %f %f %f %f\n", po->matrix.a, po->matrix.b, po->matrix.c, po->matrix.d);
                 fprintf(f3, "\tTranslate %f %f\n", po->matrix.tx, po->matrix.ty);
@@ -1375,8 +1410,8 @@ void ParseApt(const char* name)
         case AptCharacterType_Shape:
         {
             AptCharacterShape* sh = &m->apCharacters[ch]->shape;
-            fprintf(f3, "Shape:\n");
-            fprintf(f3, "Bounds %f %f %f %f\n", sh->rBounds.fTop, sh->rBounds.fLeft, sh->rBounds.fBottom, sh->rBounds.fRight);
+            fprintf(f3, "Shape: %d\n", ch);
+            fprintf(f3, "Bounds %d %f %f %f %f\n", ch, sh->rBounds.fTop, sh->rBounds.fLeft, sh->rBounds.fBottom, sh->rBounds.fRight);
         }
         break;
         case AptCharacterType_Text:
@@ -1546,8 +1581,8 @@ void ParseApt(const char* name)
         case AptCharacterType_Bitmap:
         {
             AptCharacterBitmap* im = &m->apCharacters[ch]->bitmap;
-            fprintf(f3, "Image:\n");
-            fprintf(f3, "Id %d\n", (int)im->zID);
+            fprintf(f3, "Image: %d\n", ch);
+            fprintf(f3, "Id %d %d\n", ch, (int)im->zID);
         }
         break;
         case AptCharacterType_Morph:
